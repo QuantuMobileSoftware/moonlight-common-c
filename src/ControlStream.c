@@ -29,6 +29,7 @@ static PLT_MUTEX enetMutex;
 
 static PLT_THREAD lossStatsThread;
 static PLT_THREAD invalidateRefFramesThread;
+static PLT_THREAD requestIdrFrameThread;
 static PLT_EVENT invalidateRefFramesEvent;
 static int lossCountSinceLastReport;
 static long lastGoodFrame;
@@ -144,6 +145,7 @@ static short* payloadLengths;
 static char**preconstructedPayloads;
 
 #define LOSS_REPORT_INTERVAL_MS 50
+#define IDR_INTERVAL_MS 5000
 
 // Initializes the control stream
 int initializeControlStream(void) {
@@ -529,6 +531,20 @@ static void requestInvalidateReferenceFrames(void) {
     Limelog("Invalidate reference frame request sent (%d to %d)\n", (int)payload[0], (int)payload[1]);
 }
 
+static void requestIdrFrameFunc(void* context) {
+    while (!PltIsThreadInterrupted(&requestIdrFrameThread)) {
+        
+        // Bail if we've been shutdown
+        if (stopping) {
+            break;
+        }
+
+        requestIdrOnDemand();
+        Limelog("IDR frame requested\n");
+        PltSleepMs(IDR_INTERVAL_MS);
+    }
+}
+
 static void invalidateRefFramesFunc(void* context) {
     while (!PltIsThreadInterrupted(&invalidateRefFramesThread)) {
         // Wait for a request to invalidate reference frames
@@ -574,12 +590,15 @@ int stopControlStream(void) {
     
     PltInterruptThread(&lossStatsThread);
     PltInterruptThread(&invalidateRefFramesThread);
+    PltInterruptThread(&requestIdrFrameThread);
 
     PltJoinThread(&lossStatsThread);
     PltJoinThread(&invalidateRefFramesThread);
+    PltJoinThread(&requestIdrFrameThread);
 
     PltCloseThread(&lossStatsThread);
     PltCloseThread(&invalidateRefFramesThread);
+    PltCloseThread(&requestIdrFrameThread);
 
     if (peer != NULL) {
         enet_peer_reset(peer);
@@ -745,6 +764,11 @@ int startControlStream(void) {
         }
 
         return err;
+    }
+    
+    err = PltCreateThread(requestIdrFrameFunc, NULL, &requestIdrFrameThread);
+    if (err != 0) {
+        stopping = 1;
     }
 
     return 0;
