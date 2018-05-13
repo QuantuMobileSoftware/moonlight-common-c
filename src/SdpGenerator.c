@@ -188,6 +188,7 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
     err |= addAttributeString(&optionHead, "x-nv-video[0].timeoutLengthMs", "7000");
     err |= addAttributeString(&optionHead, "x-nv-video[0].framesWithInvalidRefThreshold", "0");
+    err |= addAttributeString(&optionHead, "x-nv-video[0].maxH264Level", "31");
 
     // We don't support dynamic bitrate scaling properly (it tends to bounce between min and max and never
     // settle on the optimal bitrate if it's somewhere in the middle), so we'll just latch the bitrate
