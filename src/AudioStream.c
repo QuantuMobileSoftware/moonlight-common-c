@@ -4,6 +4,13 @@
 #include "LinkedBlockingQueue.h"
 #include "RtpReorderQueue.h"
 
+#include <stdio.h>
+#include <time.h>
+
+static int rtp_forward_fd;
+static struct sockaddr_in rtp_forward_addr;
+static uint32_t start_timestamp;
+
 static SOCKET rtpSocket = INVALID_SOCKET;
 
 static LINKED_BLOCKING_QUEUE packetQueue;
@@ -60,6 +67,18 @@ typedef struct _QUEUED_AUDIO_PACKET {
 
 // Initialize the audio stream
 void initializeAudioStream(void) {
+    rtp_forward_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (rtp_forward_fd == -1) {
+        perror("Cannot open socket");
+//        exit(-1);
+    } else {
+        memset(&rtp_forward_addr, 0, sizeof (rtp_forward_addr));
+        rtp_forward_addr.sin_family = AF_INET;
+        rtp_forward_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        rtp_forward_addr.sin_port = htons(2235);
+    }
+    start_timestamp = time(NULL) * 960;
+    
     if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
         LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
     }
@@ -181,6 +200,13 @@ static void ReceiveThreadProc(void* context) {
         if (rtp->packetType != 97) {
             // Not audio
             continue;
+        }
+
+        uint32_t timestamp = ntohl(*(uint32_t*)&rtp->reserved[0]);
+        *(uint32_t*)&rtp->reserved[0] = htonl(start_timestamp + timestamp / 5 * 240);
+        Limelog("RTP timestamp: %d\n", timestamp);
+        if (sendto(rtp_forward_fd, packet->data, packet->size, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
+            Limelog("RTP forward failed: %d\n", (int) LastSocketError());
         }
 
         // RTP sequence number must be in host order for the RTP queue
