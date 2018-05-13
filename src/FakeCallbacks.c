@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <arpa/inet.h>
+#include <stdlib.h>
 
 #define DECODER_BUFFER_SIZE 92*1024
 #define FF_INPUT_BUFFER_PADDING_SIZE 32
@@ -10,11 +11,13 @@ static int h264streamfd = 0;
 static char ffmpeg_buffer[DECODER_BUFFER_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
 
 static int fakeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
-    char * h264stream = "/tmp/stream.h264";
-    h264streamfd = open(h264stream, O_WRONLY);
-    if (h264streamfd == -1) {
-        fprintf(stderr, "Couldn't open FIFO\n");
-        return -1;
+    char* h264stream = getenv("RAW_H264_STREAM");
+    if (h264stream != NULL) {
+        h264streamfd = open(h264stream, O_WRONLY);
+        if (h264streamfd == -1) {
+            fprintf(stderr, "Couldn't open FIFO\n");
+            return -1;
+        }
     }
     
     return 0;

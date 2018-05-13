@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <stdlib.h>
 
 static int rtp_forward_fd;
 static struct sockaddr_in rtp_forward_addr;
@@ -67,17 +68,20 @@ typedef struct _QUEUED_AUDIO_PACKET {
 
 // Initialize the audio stream
 void initializeAudioStream(void) {
-    rtp_forward_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (rtp_forward_fd == -1) {
-        perror("Cannot open socket");
-//        exit(-1);
-    } else {
-        memset(&rtp_forward_addr, 0, sizeof (rtp_forward_addr));
-        rtp_forward_addr.sin_family = AF_INET;
-        rtp_forward_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-        rtp_forward_addr.sin_port = htons(2235);
+    char* rtp_forward_port = getenv("RTP_FORWARD_AUDIO_PORT");
+    if (rtp_forward_port != NULL) {
+        rtp_forward_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (rtp_forward_fd == -1) {
+            perror("Cannot open socket");
+            exit(1);
+        } else {
+            memset(&rtp_forward_addr, 0, sizeof (rtp_forward_addr));
+            rtp_forward_addr.sin_family = AF_INET;
+            rtp_forward_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+            rtp_forward_addr.sin_port = htons(atoi(rtp_forward_port));
+        }
+        start_timestamp = time(NULL) * 960;
     }
-    start_timestamp = time(NULL) * 960;
     
     if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
         LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
