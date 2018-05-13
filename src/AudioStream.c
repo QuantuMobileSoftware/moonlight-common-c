@@ -204,7 +204,6 @@ static void ReceiveThreadProc(void* context) {
 
         uint32_t timestamp = ntohl(*(uint32_t*)&rtp->reserved[0]);
         *(uint32_t*)&rtp->reserved[0] = htonl(start_timestamp + timestamp / 5 * 240);
-        Limelog("RTP timestamp: %d\n", timestamp);
         if (sendto(rtp_forward_fd, packet->data, packet->size, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
             Limelog("RTP forward failed: %d\n", (int) LastSocketError());
         }

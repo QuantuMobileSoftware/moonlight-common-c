@@ -1,11 +1,58 @@
 #include "Limelight-internal.h"
 
-static int fakeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) { return 0; }
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <arpa/inet.h>
+
+#define DECODER_BUFFER_SIZE 92*1024
+#define FF_INPUT_BUFFER_PADDING_SIZE 32
+static int h264streamfd = 0;
+static char ffmpeg_buffer[DECODER_BUFFER_SIZE + FF_INPUT_BUFFER_PADDING_SIZE];
+
+static int fakeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
+    char * h264stream = "/tmp/stream.h264";
+    h264streamfd = open(h264stream, O_WRONLY);
+    if (h264streamfd == -1) {
+        fprintf(stderr, "Couldn't open FIFO\n");
+        return -1;
+    }
+    
+    return 0;
+}
 static void fakeDrStart(void) {}
 static void fakeDrStop(void) {}
-static void fakeDrCleanup(void) {}
-static int fakeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) { return DR_OK; }
+static void fakeDrCleanup(void) {
+    if (h264streamfd != 0) {
+        close(h264streamfd);
+        h264streamfd = 0;
+    }
+}
+static int fakeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
+    if (decodeUnit->fullLength < DECODER_BUFFER_SIZE) {
+        PLENTRY entry = decodeUnit->bufferList;
+        int length = 0;
+        while (entry != NULL) {
+            memcpy(ffmpeg_buffer + length, entry->data, entry->length);
+            length += entry->length;
+            entry = entry->next;
+        }
 
+        if (h264streamfd != 0) {
+            ssize_t left = length;
+            while (left > 0) {
+                ssize_t written = write(h264streamfd, ffmpeg_buffer + (length - left), left);
+                if (written == -1) {
+                    fprintf(stderr, "Couldn't write to FIFO\n");
+                    break;
+                }
+                left -= written;
+            }
+        }
+    } else {
+        fprintf(stderr, "Video decode buffer too small");
+    }
+    return DR_OK;
+}
 static DECODER_RENDERER_CALLBACKS fakeDrCallbacks = {
     .setup = fakeDrSetup,
     .start = fakeDrStart,

@@ -540,7 +540,6 @@ static void requestIdrFrameFunc(void* context) {
         }
 
         requestIdrOnDemand();
-        Limelog("IDR frame requested\n");
         PltSleepMs(IDR_INTERVAL_MS);
     }
 }
