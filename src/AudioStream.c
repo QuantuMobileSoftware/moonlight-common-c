@@ -8,7 +8,7 @@
 #include <time.h>
 #include <stdlib.h>
 
-static int rtp_forward_fd;
+static int rtp_forward_fd = 0;
 static struct sockaddr_in rtp_forward_addr;
 static uint32_t start_timestamp;
 
@@ -206,10 +206,12 @@ static void ReceiveThreadProc(void* context) {
             continue;
         }
 
-        uint32_t timestamp = ntohl(*(uint32_t*)&rtp->reserved[0]);
-        *(uint32_t*)&rtp->reserved[0] = htonl(start_timestamp + timestamp / 5 * 240);
-        if (sendto(rtp_forward_fd, packet->data, packet->size, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
-            Limelog("RTP forward failed: %d\n", (int) LastSocketError());
+        if (rtp_forward_fd > 0) {
+            uint32_t timestamp = ntohl(*(uint32_t*)&rtp->reserved[0]);
+            *(uint32_t*)&rtp->reserved[0] = htonl(start_timestamp + timestamp / 5 * 240);
+            if (sendto(rtp_forward_fd, packet->data, packet->size, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
+                Limelog("RTP forward failed: %d\n", (int) LastSocketError());
+            }
         }
 
         // RTP sequence number must be in host order for the RTP queue
