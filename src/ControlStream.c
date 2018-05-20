@@ -540,7 +540,7 @@ static void requestIdrFrameFunc(void* context) {
         }
 
         requestIdrOnDemand();
-        PltSleepMs(IDR_INTERVAL_MS);
+        PltSleepMs(IDR_INTERVAL_MS/5);
     }
 }
 
