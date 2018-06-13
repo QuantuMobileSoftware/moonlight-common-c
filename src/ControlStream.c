@@ -145,7 +145,7 @@ static short* payloadLengths;
 static char**preconstructedPayloads;
 
 #define LOSS_REPORT_INTERVAL_MS 50
-#define IDR_INTERVAL_MS 5000
+#define IDR_INTERVAL_MS 3000
 
 // Initializes the control stream
 int initializeControlStream(void) {
