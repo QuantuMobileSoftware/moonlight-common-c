@@ -9,7 +9,9 @@
 #include <stdlib.h>
 
 static int rtp_forward_fd = 0;
+static PLT_MUTEX rtp_forward_addr_lock;
 static struct sockaddr_in rtp_forward_addr;
+static uint8_t is_rtp_forward_addr_set = 0;
 static uint32_t start_timestamp;
 
 static SOCKET rtpSocket = INVALID_SOCKET;
@@ -68,19 +70,38 @@ typedef struct _QUEUED_AUDIO_PACKET {
 
 // Initialize the audio stream
 void initializeAudioStream(void) {
-    char* rtp_forward_port = getenv("RTP_FORWARD_AUDIO_PORT");
-    if (rtp_forward_port != NULL) {
+    char* rtp_server_port = getenv("RTP_SERVER_AUDIO_PORT");
+    if (rtp_server_port != NULL) {
+        PltCreateMutex(&rtp_forward_addr_lock);
         rtp_forward_fd = socket(AF_INET, SOCK_DGRAM, 0);
         if (rtp_forward_fd == -1) {
             perror("Cannot open socket");
             exit(1);
-        } else {
-            memset(&rtp_forward_addr, 0, sizeof (rtp_forward_addr));
-            rtp_forward_addr.sin_family = AF_INET;
-            rtp_forward_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-            rtp_forward_addr.sin_port = htons(atoi(rtp_forward_port));
         }
+        struct sockaddr_in rtp_server_addr;
+        memset(&rtp_server_addr, 0, sizeof (rtp_server_addr));
+        rtp_server_addr.sin_family = AF_INET;
+        rtp_server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        rtp_server_addr.sin_port = htons(atoi(rtp_server_port));
+        if (bind(rtp_forward_fd, (struct sockaddr*) &rtp_server_addr, sizeof (rtp_server_addr)) == -1) {
+            perror("Cannot bind socket");
+            exit(1);
+        }
+    }
+    char* rtp_forward_port = getenv("RTP_FORWARD_AUDIO_PORT");
+    if (rtp_forward_port != NULL && rtp_forward_fd == 0) {
+        PltCreateMutex(&rtp_forward_addr_lock);
+        rtp_forward_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (rtp_forward_fd == -1) {
+            perror("Cannot open socket");
+            exit(1);
+        }
+        memset(&rtp_forward_addr, 0, sizeof (rtp_forward_addr));
+        rtp_forward_addr.sin_family = AF_INET;
+        rtp_forward_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        rtp_forward_addr.sin_port = htons(atoi(rtp_forward_port));
         start_timestamp = time(NULL) * 960;
+        is_rtp_forward_addr_set = 1;
     }
     
     if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
@@ -109,6 +130,10 @@ void destroyAudioStream(void) {
         freePacketList(LbqDestroyLinkedBlockingQueue(&packetQueue));
     }
     RtpqCleanupQueue(&rtpReorderQueue);
+    if (rtp_forward_fd != 0) {
+        close(rtp_forward_fd);
+        PltDeleteMutex(&rtp_forward_addr_lock);
+    }
 }
 
 static void UdpPingThreadProc(void* context) {
@@ -127,6 +152,20 @@ static void UdpPingThreadProc(void* context) {
             Limelog("Audio Ping: sendto() failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketError());
             return;
+        }
+        
+        if (rtp_forward_fd != 0) {
+            char buf[5];
+            struct sockaddr_in tmp_addr;
+            socklen_t peer_addr_len = sizeof (tmp_addr);
+            ssize_t nread = recvfrom(rtp_forward_fd, buf, sizeof (buf), MSG_DONTWAIT,
+                    (struct sockaddr *) &tmp_addr, &peer_addr_len);
+            if (nread != -1) {
+                PltLockMutex(&rtp_forward_addr_lock);
+                rtp_forward_addr = tmp_addr;
+                is_rtp_forward_addr_set = 1;
+                PltLockMutex(&rtp_forward_addr_lock);
+            }
         }
 
         PltSleepMs(500);
@@ -207,11 +246,16 @@ static void ReceiveThreadProc(void* context) {
         }
 
         if (rtp_forward_fd > 0) {
-            uint32_t timestamp = ntohl(*(uint32_t*)&rtp->reserved[0]);
-            *(uint32_t*)&rtp->reserved[0] = htonl(start_timestamp + timestamp / 5 * 240);
-            if (sendto(rtp_forward_fd, packet->data, packet->size, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
-                Limelog("RTP forward failed: %d\n", (int) LastSocketError());
+            PltLockMutex(&rtp_forward_addr_lock);
+            if (is_rtp_forward_addr_set) {
+                uint32_t timestamp = ntohl(*(uint32_t*)&rtp->reserved[0]);
+                *(uint32_t*)&rtp->reserved[0] = htonl(start_timestamp + timestamp / 5 * 240);
+                if (sendto(rtp_forward_fd, packet->data, packet->size, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
+                    Limelog("RTP forward failed: %d\n", (int) LastSocketError());
+                }
             }
+            PltLockMutex(&rtp_forward_addr_lock);
+            continue;
         }
 
         // RTP sequence number must be in host order for the RTP queue

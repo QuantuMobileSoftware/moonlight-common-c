@@ -3,6 +3,11 @@
 #include "PlatformThreads.h"
 #include "RtpFecQueue.h"
 
+static int rtp_forward_fd= 0;
+static PLT_MUTEX rtp_forward_addr_lock;
+static struct sockaddr_in rtp_forward_addr;
+static uint8_t is_rtp_forward_addr_set = 0;
+
 #define FIRST_FRAME_MAX 1500
 #define FIRST_FRAME_TIMEOUT_SEC 10
 
@@ -28,6 +33,25 @@ static PLT_THREAD decoderThread;
 
 // Initialize the video stream
 void initializeVideoStream(void) {
+    char* rtp_server_port = getenv("RTP_SERVER_VIDEO_PORT");
+    if (rtp_server_port != NULL) {
+        PltCreateMutex(&rtp_forward_addr_lock);
+        rtp_forward_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (rtp_forward_fd == -1) {
+            perror("Cannot open socket");
+            exit(1);
+        }
+        struct sockaddr_in rtp_server_addr;
+        memset(&rtp_server_addr, 0, sizeof (rtp_server_addr));
+        rtp_server_addr.sin_family = AF_INET;
+        rtp_server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        rtp_server_addr.sin_port = htons(atoi(rtp_server_port));
+        if (bind(rtp_forward_fd, (struct sockaddr*) &rtp_server_addr, sizeof (rtp_server_addr)) == -1) {
+            perror("Cannot bind socket");
+            exit(1);
+        }
+    }
+    
     initializeVideoDepacketizer(StreamConfig.packetSize);
     RtpfInitializeQueue(&rtpQueue); //TODO RTP_QUEUE_DELAY
 }
@@ -36,6 +60,10 @@ void initializeVideoStream(void) {
 void destroyVideoStream(void) {
     destroyVideoDepacketizer();
     RtpfCleanupQueue(&rtpQueue);
+    if (rtp_forward_fd != 0) {
+        close(rtp_forward_fd);
+        PltDeleteMutex(&rtp_forward_addr_lock);
+    }
 }
 
 // UDP Ping proc
@@ -53,6 +81,20 @@ static void UdpPingThreadProc(void* context) {
             Limelog("Video Ping: send() failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketError());
             return;
+        }
+        
+        if (rtp_forward_fd != 0) {
+            char buf[5];
+            struct sockaddr_in tmp_addr;
+            socklen_t peer_addr_len = sizeof (tmp_addr);
+            ssize_t nread = recvfrom(rtp_forward_fd, buf, sizeof (buf), MSG_DONTWAIT,
+                    (struct sockaddr *) &tmp_addr, &peer_addr_len);
+            if (nread != -1) {
+                PltLockMutex(&rtp_forward_addr_lock);
+                rtp_forward_addr = tmp_addr;
+                is_rtp_forward_addr_set = 1;
+                PltLockMutex(&rtp_forward_addr_lock);
+            }
         }
 
         PltSleepMs(500);
@@ -91,6 +133,17 @@ static void ReceiveThreadProc(void* context) {
         }
         else if  (err == 0) {
             // Receive timed out; try again
+            continue;
+        }
+        
+        if (rtp_forward_fd > 0) {
+            PltLockMutex(&rtp_forward_addr_lock);
+            if (is_rtp_forward_addr_set) {
+                if (sendto(rtp_forward_fd, buffer, err, 0, (struct sockaddr*) &rtp_forward_addr, sizeof (rtp_forward_addr)) == -1) {
+                    Limelog("RTP forward failed: %d\n", (int) LastSocketError());
+                }
+            }
+            PltLockMutex(&rtp_forward_addr_lock);
             continue;
         }
 
